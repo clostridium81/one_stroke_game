@@ -1,0 +1,1251 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>一筆書きジャッジ</title>
+<style>
+  :root{
+    --bg:#0e1016; --panel:#171b28; --ink:#ecf1ff; --sub:#8a93ad;
+    --good:#3ddc84; --bad:#ff5d5d; --timer:#4da3ff; --timer-low:#ff5d5d;
+    --btn-yes:#2f6fb5; --btn-no:#c07a1f;
+  }
+  *{ margin:0; padding:0; box-sizing:border-box; }
+  html,body{ height:100%; }
+  body{
+    background:var(--bg); color:var(--ink);
+    font-family:-apple-system,"Hiragino Kaku Gothic ProN","Noto Sans JP",system-ui,sans-serif;
+    display:flex; justify-content:center; align-items:flex-start;
+    user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent;
+    touch-action:manipulation; overflow:hidden;
+  }
+  #app{ width:min(96vw,460px); height:100vh; height:100dvh; max-height:860px; display:flex; flex-direction:column;
+        padding:10px 0 max(14px, env(safe-area-inset-bottom)); gap:10px; }
+
+  /* ---- HUD ---- */
+  #hud{ display:flex; align-items:center; gap:12px; padding:0 4px; font-weight:700; }
+  #lives{ font-size:20px; letter-spacing:2px; color:var(--bad); min-width:78px; }
+  #level{ font-size:17px; }
+  #score{ margin-left:auto; font-size:19px; font-variant-numeric:tabular-nums; }
+  #muteBtn{ background:none; border:none; font-size:20px; cursor:pointer; padding:2px 4px; }
+
+  /* ---- タイマー ---- */
+  #timerWrap{ height:12px; background:var(--panel); border-radius:6px; overflow:hidden; }
+  #timerBar{ height:100%; width:100%; background:var(--timer); border-radius:6px; transition:background .15s; }
+  #timerBar.low{ background:var(--timer-low); }
+
+  /* ---- ステージ ---- */
+  #stage{ position:relative; flex:1; min-height:0; background:var(--panel); border-radius:16px; overflow:hidden; }
+  #stage.shake{ animation:shake .3s; }
+  @keyframes shake{ 0%,100%{transform:translateX(0)} 25%{transform:translateX(-7px)} 50%{transform:translateX(6px)} 75%{transform:translateX(-3px)} }
+  #cv{ position:absolute; inset:0; width:100%; height:100%; display:block; }
+
+  .screen{ position:absolute; inset:0; display:flex; flex-direction:column; justify-content:center; align-items:center;
+           gap:14px; background:rgba(14,16,22,.88); backdrop-filter:blur(3px); text-align:center; padding:22px; z-index:5; }
+  .hidden{ display:none !important; }
+  .screen h1{ font-size:30px; letter-spacing:2px; }
+  .screen .rule{ color:var(--sub); font-size:14px; line-height:1.9; }
+  .screen .rule b{ color:var(--ink); }
+  .bigbtn{ font-size:20px; font-weight:800; padding:14px 46px; border:none; border-radius:14px;
+           background:var(--btn-yes); color:#fff; cursor:pointer; margin-top:6px; }
+  .bigbtn:active{ transform:scale(.95); }
+  #goStats{ font-size:16px; line-height:2; }
+  #goStats .num{ font-weight:800; font-size:22px; }
+  #newRecord{ color:var(--good); font-weight:800; }
+
+  /* ---- フィードバック ---- */
+  #flash{ position:absolute; top:14px; left:0; right:0; text-align:center; z-index:4; pointer-events:none; }
+  #flashMain{ font-size:34px; font-weight:900; text-shadow:0 2px 12px rgba(0,0,0,.6); }
+  #flashMain.good{ color:var(--good); } #flashMain.bad{ color:var(--bad); }
+  #flashSub{ font-size:15px; color:var(--ink); margin-top:4px; font-weight:700; }
+  #combo{ position:absolute; bottom:12px; right:14px; font-size:16px; font-weight:800; color:#ffb84d; z-index:4; pointer-events:none; }
+  #lvup{ position:absolute; bottom:12px; left:14px; font-size:15px; font-weight:800; color:var(--timer); z-index:4; pointer-events:none;
+         opacity:0; transition:opacity .3s; }
+
+  /* ---- 回答ボタン ---- */
+  #answers{ display:flex; gap:12px; }
+  #answers button{ flex:1; font-size:21px; font-weight:900; padding:20px 0; border:none; border-radius:16px; color:#fff; cursor:pointer; }
+  #btnYes{ background:var(--btn-yes); } #btnNo{ background:var(--btn-no); }
+  #answers button:active{ transform:scale(.96); }
+  #answers button:disabled{ opacity:.45; }
+  .keyhint{ font-size:11px; font-weight:400; opacity:.7; display:block; margin-top:3px; }
+  @media (hover: none){ .keyhint{ display:none; } }   /* タッチ端末ではキー表記を隠す */
+
+  /* 背の低い端末(iPhone SE等)向けのコンパクト表示 */
+  @media (max-height: 620px){
+    #app{ padding-top:6px; gap:7px; }
+    #answers button{ padding:13px 0; font-size:19px; }
+    .screen h1{ font-size:24px; }
+    #flashMain{ font-size:27px; }
+    #hud{ font-size:15px; }
+    #lives{ font-size:17px; min-width:64px; }
+  }
+
+  /* ---- ギャラリー(調整用 #gallery) ---- */
+  #gallery{ display:none; flex-wrap:wrap; gap:10px; padding:16px; overflow:auto; height:100dvh; width:100vw; align-content:flex-start; }
+  #gallery .cell{ background:var(--panel); border-radius:10px; padding:6px; text-align:center; font-size:12px; }
+  #gallery canvas{ display:block; }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div id="hud">
+    <span id="lives">❤❤❤</span>
+    <span id="level">Lv 1</span>
+    <span id="score">0</span>
+    <button id="muteBtn" title="サウンド">🔊</button>
+  </div>
+  <div id="timerWrap"><div id="timerBar"></div></div>
+
+  <div id="stage">
+    <canvas id="cv"></canvas>
+
+    <div id="flash" class="hidden">
+      <div id="flashMain"></div>
+      <div id="flashSub"></div>
+    </div>
+    <div id="combo" class="hidden"></div>
+    <div id="lvup">LEVEL UP!</div>
+
+    <div id="titleScreen" class="screen">
+      <h1>一筆書きジャッジ</h1>
+      <div class="rule">
+        この図形、<b>一筆書きできる？</b><br>
+        5秒以内に<b>直感</b>で判定！
+      </div>
+      <button id="startBtn" class="bigbtn">スタート</button>
+    </div>
+
+    <div id="gameoverScreen" class="screen hidden">
+      <h1>GAME OVER</h1>
+      <div id="goStats"></div>
+      <div id="newRecord" class="hidden">✨ NEW RECORD! ✨</div>
+      <button id="retryBtn" class="bigbtn">もう一度</button>
+    </div>
+  </div>
+
+  <div id="answers">
+    <button id="btnYes">〇 描ける<span class="keyhint">[←] キー</span></button>
+    <button id="btnNo">✕ 描けない<span class="keyhint">[→] キー</span></button>
+  </div>
+</div>
+
+<div id="gallery"></div>
+
+<script>
+/*LOGIC-START*/
+'use strict';
+// ============================================================
+// 一筆書き判定ゲーム 図形生成ロジック（DOM非依存 / Nodeでもテスト可能）
+//
+// 原理: 一筆書き可 ⟺ 連結 かつ 奇数次数頂点が0個か2個 (オイラー路)
+// 50%の実現: 先にコインフリップで答えを決め、その答えになる図形を構築する
+// ============================================================
+
+const rand = Math.random;
+function randInt(a, b){ return a + Math.floor(rand() * (b - a + 1)); }
+function choice(arr){ return arr[Math.floor(rand() * arr.length)]; }
+function shuffle(arr){
+  for (let i = arr.length - 1; i > 0; i--){
+    const j = Math.floor(rand() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+// ---- 生成時の知覚制約(構築座標系: 図形半径 ≈ 1) ----
+const MIN_VDIST    = 0.26;  // 頂点間の最小距離
+const MIN_PT_LINE  = 0.11;  // 頂点と無関係な線分の最小距離
+const ANGLE_ADD    = 0.30;  // 辺追加時の同一頂点での最小角(rad)
+const ANGLE_TAIL   = 0.45;  // ヒゲは浅い角度だと線の続きに見えるため強めに
+const CROSS_ANGLE  = 0.50;  // 交差細分を許す最小交差角(rad)
+const CROSS_END    = 0.13;  // 交差点と線分端の最小距離
+// ---- 正規化後([-1,1])の最終監査しきい値 ----
+const F_VDIST = 0.15, F_PT_LINE = 0.065, F_ANG_ODD = 0.34, F_ANG_ANY = 0.15;
+const F_ODD_SP = 0.24;      // 奇点同士の最小距離(近接すると数え間違いを誘発する)
+const DEG_CAP = 4;          // 1頂点に集まる線は最大4本(視覚的潰れ防止)
+
+// ============================================================
+// グラフコア
+// ============================================================
+function edgeKey(a, b){ return a < b ? a + '_' + b : b + '_' + a; }
+
+function newFig(){ return { pts: [], edges: [], eset: new Set(), opEdges: new Set() }; }
+
+function addE(f, a, b){ f.edges.push([a, b]); f.eset.add(edgeKey(a, b)); }
+function removeE(f, a, b){
+  const k = edgeKey(a, b);
+  const i = f.edges.findIndex(([x, y]) => edgeKey(x, y) === k);
+  if (i >= 0){ f.edges.splice(i, 1); f.eset.delete(k); }
+}
+function hasE(f, a, b){ return f.eset.has(edgeKey(a, b)); }
+
+function degreesOf(f){
+  const d = new Array(f.pts.length).fill(0);
+  for (const [a, b] of f.edges){ d[a]++; d[b]++; }
+  return d;
+}
+function oddVertsOf(f){
+  const d = degreesOf(f), r = [];
+  for (let i = 0; i < d.length; i++) if (d[i] % 2 === 1) r.push(i);
+  return r;
+}
+function isConnectedFig(f){
+  const n = f.pts.length;
+  if (n === 0 || f.edges.length === 0) return false;
+  const deg = degreesOf(f);
+  if (deg.some(d => d === 0)) return false;   // 孤立頂点は不可
+  const adj = Array.from({ length: n }, () => []);
+  for (const [a, b] of f.edges){ adj[a].push(b); adj[b].push(a); }
+  const seen = new Array(n).fill(false);
+  const st = [0]; seen[0] = true; let c = 1;
+  while (st.length){
+    const v = st.pop();
+    for (const w of adj[v]) if (!seen[w]){ seen[w] = true; c++; st.push(w); }
+  }
+  return c === n;
+}
+function isDrawableFig(f){
+  if (!isConnectedFig(f)) return false;
+  const k = oddVertsOf(f).length;
+  return k === 0 || k === 2;
+}
+
+function snapFig(f){
+  return { pts: f.pts.slice(), edges: f.edges.map(e => e.slice()),
+           eset: new Set(f.eset), opEdges: new Set(f.opEdges) };
+}
+function restoreFig(f, s){ f.pts = s.pts; f.edges = s.edges; f.eset = s.eset; f.opEdges = s.opEdges; }
+
+// ============================================================
+// ジオメトリ
+// ============================================================
+function dist(p, q){ return Math.hypot(p.x - q.x, p.y - q.y); }
+
+// 線分の真の内部交差(端点を含まない)。あれば {t,u,x,y}
+function segInt(p, p2, q, q2){
+  const rx = p2.x - p.x, ry = p2.y - p.y, sx = q2.x - q.x, sy = q2.y - q.y;
+  const den = rx * sy - ry * sx;
+  if (Math.abs(den) < 1e-9) return null;
+  const t = ((q.x - p.x) * sy - (q.y - p.y) * sx) / den;
+  const u = ((q.x - p.x) * ry - (q.y - p.y) * rx) / den;
+  if (t <= 1e-6 || t >= 1 - 1e-6 || u <= 1e-6 || u >= 1 - 1e-6) return null;
+  return { t, u, x: p.x + t * rx, y: p.y + t * ry };
+}
+function ptSegDist(p, a, b){
+  const vx = b.x - a.x, vy = b.y - a.y;
+  const L2 = vx * vx + vy * vy;
+  if (L2 < 1e-12) return dist(p, a);
+  let t = ((p.x - a.x) * vx + (p.y - a.y) * vy) / L2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + t * vx), p.y - (a.y + t * vy));
+}
+function angDiff(a, b){
+  let d = Math.abs(a - b) % (Math.PI * 2);
+  return Math.min(d, Math.PI * 2 - d);
+}
+function incidentDirs(f, v){
+  const dirs = [];
+  for (const [a, b] of f.edges){
+    if (a === v) dirs.push(Math.atan2(f.pts[b].y - f.pts[v].y, f.pts[b].x - f.pts[v].x));
+    else if (b === v) dirs.push(Math.atan2(f.pts[a].y - f.pts[v].y, f.pts[a].x - f.pts[v].x));
+  }
+  return dirs;
+}
+function minAngleWith(f, v, dir){
+  let m = Infinity;
+  for (const d of incidentDirs(f, v)) m = Math.min(m, angDiff(d, dir));
+  return m;
+}
+function minAngleAt(f, v){
+  const dirs = incidentDirs(f, v);
+  let m = Infinity;
+  for (let i = 0; i < dirs.length; i++)
+    for (let j = i + 1; j < dirs.length; j++) m = Math.min(m, angDiff(dirs[i], dirs[j]));
+  return m;
+}
+
+// ============================================================
+// 辺の追加(検証つき)。allowCross時は交差点を頂点として細分する
+// (交差点は次数4=偶数なのでパリティ不変)
+// ============================================================
+function tryAddEdge(f, a, b, maxCross){
+  if (a === b || hasE(f, a, b)) return false;
+  const deg = degreesOf(f);
+  if (deg[a] >= DEG_CAP || deg[b] >= DEG_CAP) return false;
+  const A = f.pts[a], B = f.pts[b];
+
+  for (let k = 0; k < f.pts.length; k++){
+    if (k === a || k === b) continue;
+    if (ptSegDist(f.pts[k], A, B) < MIN_PT_LINE) return false;
+  }
+  if (minAngleWith(f, a, Math.atan2(B.y - A.y, B.x - A.x)) < ANGLE_ADD) return false;
+  if (minAngleWith(f, b, Math.atan2(A.y - B.y, A.x - B.x)) < ANGLE_ADD) return false;
+
+  const hits = [];
+  for (const [c, d] of f.edges){
+    if (c === a || c === b || d === a || d === b) continue;
+    const X = segInt(A, B, f.pts[c], f.pts[d]);
+    if (!X) continue;
+    if (maxCross === 0) return false;
+    const C = f.pts[c], D = f.pts[d];
+    const P = { x: X.x, y: X.y };
+    if (dist(P, A) < CROSS_END || dist(P, B) < CROSS_END ||
+        dist(P, C) < CROSS_END || dist(P, D) < CROSS_END) return false;
+    const a1 = Math.atan2(B.y - A.y, B.x - A.x), a2 = Math.atan2(D.y - C.y, D.x - C.x);
+    const cang = Math.min(angDiff(a1, a2), Math.PI - angDiff(a1, a2));
+    if (cang < CROSS_ANGLE) return false;
+    for (const p of f.pts) if (dist(P, p) < MIN_VDIST * 0.55) return false;
+    for (const h of hits) if (Math.hypot(h.x - X.x, h.y - X.y) < MIN_VDIST * 0.55) return false;
+    hits.push({ c, d, ...X });
+  }
+  if (hits.length > maxCross) return false;
+
+  if (hits.length === 0){ addE(f, a, b); return true; }
+
+  hits.sort((u, v) => u.t - v.t);
+  let prev = a;
+  for (const h of hits){
+    const nv = f.pts.length;
+    f.pts.push({ x: h.x, y: h.y });
+    removeE(f, h.c, h.d);
+    addE(f, h.c, nv); addE(f, nv, h.d);
+    addE(f, prev, nv);
+    prev = nv;
+  }
+  addE(f, prev, b);
+  return true;
+}
+
+// 閉ループを一括追加(1本でも失敗したら全ロールバック)
+function addLoop(f, idx, maxCross){
+  const s = snapFig(f);
+  for (let i = 0; i < idx.length; i++){
+    const a = idx[i], b = idx[(i + 1) % idx.length];
+    if (!tryAddEdge(f, a, b, maxCross)){ restoreFig(f, s); return false; }
+  }
+  return true;
+}
+
+function dropUnused(f){
+  const deg = degreesOf(f);
+  const map = []; const npts = []; let k = 0;
+  for (let i = 0; i < f.pts.length; i++){
+    if (deg[i] > 0){ map[i] = k++; npts.push(f.pts[i]); } else map[i] = -1;
+  }
+  f.pts = npts;
+  f.edges = f.edges.map(([a, b]) => [map[a], map[b]]);
+  f.eset = new Set(f.edges.map(([a, b]) => edgeKey(a, b)));
+}
+
+// ============================================================
+// ベース図形の創作エンジン
+//
+// 固定モチーフは一切持たない。3つの「生成文法」が対称性の下で
+// 閉ループ系をアルゴリズム的に創作する:
+//   rosette   — 回転対称: 軌道点列 + パステンプレートの k回複製
+//   bilateral — 鏡映対称: 軸アンカー + 片側パスの鏡映閉包
+//   chain     — 並進対称: セル(小ループ)の連鎖(ブレスレット/波)
+// いずれも「閉ループの和集合」なので全頂点が偶数次数になり、
+// 対称性が人間の前注意的知覚に「美しい・整っている」と映る。
+// 奇点(操作による対称性の破れ)は違和感としてポップアウトする。
+// ============================================================
+function circlePts(cx, cy, r, n, rot){
+  const pts = [];
+  for (let i = 0; i < n; i++){
+    const a = rot + i * 2 * Math.PI / n;
+    pts.push({ x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) });
+  }
+  return pts;
+}
+function rotateAll(f, th){
+  const cs = Math.cos(th), sn = Math.sin(th);
+  f.pts = f.pts.map(p => ({ x: p.x * cs - p.y * sn, y: p.x * sn + p.y * cs }));
+}
+
+// --- 回転対称ロゼット ---
+// 軌道 = (半径,位相)の点環。テンプレート(軌道ホップ列)を1ステップずつ
+// k回回転複製すると、終端シフトSが何であれ全頂点が偶数次数になる。
+// S=1で多角形/歯車/花、S=2で星型多角形系が「発明」される。
+function genRosette(P){
+  const R = P.ros;
+  const k = randInt(R.kMin, R.kMax);
+  const step = 2 * Math.PI / k;
+  const rot0 = rand() * Math.PI * 2;
+  const maxOrb = Math.min(R.maxOrbits, Math.floor(P.maxPts / k));
+  if (maxOrb < 2) return null;
+  const nOrb = randInt(2, maxOrb);
+
+  const f = newFig();
+  const orbits = [];
+  for (let o = 0; o < nOrb; o++){
+    // 半径は帯状に分けて重なりを防ぎ、位相は0/半ステップに寄せると整って見える
+    const band = 1.05 - o * (0.62 / Math.max(nOrb - 1, 1));
+    const r = Math.max(0.3, band + (rand() * 2 - 1) * 0.09);
+    const ph = rand() < 0.72 ? choice([0, step / 2]) : (0.2 + rand() * 0.6) * step;
+    const idx = [];
+    for (let i = 0; i < k; i++){
+      idx.push(f.pts.length);
+      const a = rot0 + ph + i * step;
+      f.pts.push({ x: r * Math.cos(a), y: r * Math.sin(a) });
+    }
+    orbits.push(idx);
+  }
+  const pt = (o, s) => orbits[o][((s % k) + k) % k];
+
+  const nSys = randInt(R.sysMin, R.sysMax);
+  const usedOrb = [];
+  let ok = 0;
+  for (let s = 0; s < nSys + 2 && ok < nSys; s++){
+    // 連結を保つため、2系統目以降は使用済み軌道から始める
+    const o0 = usedOrb.length ? choice(usedOrb) : randInt(0, nOrb - 1);
+    const hops = [[o0, 0]];
+    const nh = randInt(0, R.maxHops);
+    for (let h = 0; h < nh; h++) hops.push([randInt(0, nOrb - 1), randInt(0, 1)]);
+    const S = (R.allowStar && P.maxCross > 0 && k >= 5 && rand() < 0.4) ? 2 : 1;
+    hops.push([o0, S]);
+
+    const snap = snapFig(f);
+    let good = true;
+    for (let i = 0; i < k && good; i++){
+      for (let h = 0; h + 1 < hops.length && good; h++){
+        const a = pt(hops[h][0], hops[h][1] + i);
+        const b = pt(hops[h + 1][0], hops[h + 1][1] + i);
+        if (a === b || !tryAddEdge(f, a, b, P.maxCross)) good = false;
+      }
+    }
+    if (!good){ restoreFig(f, snap); continue; }
+    ok++;
+    for (const [o] of hops) if (!usedOrb.includes(o)) usedOrb.push(o);
+  }
+  if (ok < R.sysMin) return null;
+  f.fam = 'ros' + k;
+  return f;
+}
+
+// --- 鏡映対称エンブレム ---
+// 軸上のアンカーから片側の点を経由して軸に戻るパス + その鏡映 = 閉ループ。
+// 盾・蝶・壺・結晶…と呼びたくなる形が座標の連続空間から生まれる。
+function genBilateral(P){
+  const C = P.bil;
+  const f = newFig();
+  const nA = randInt(2, C.anchMax);
+  const ys = [];
+  for (let t = 0; t < 40 && ys.length < nA; t++){
+    const y = -1 + rand() * 2;
+    if (ys.every(v => Math.abs(v - y) >= 0.6)) ys.push(y);
+  }
+  if (ys.length < nA) return null;
+  ys.sort((a, b) => a - b);
+  const anchors = ys.map(y => { f.pts.push({ x: 0, y }); return f.pts.length - 1; });
+
+  const nR = randInt(C.sideMin, C.sideMax);
+  const rights = [], mirror = {};
+  for (let t = 0; t < 80 && rights.length < nR; t++){
+    const p = { x: 0.34 + rand() * 0.72, y: -1.15 + rand() * 2.3 };
+    if (f.pts.every(q => dist(p, q) >= MIN_VDIST)){
+      const ri = f.pts.length; f.pts.push(p);
+      const li = f.pts.length; f.pts.push({ x: -p.x, y: p.y });
+      mirror[ri] = li; mirror[li] = ri;
+      rights.push(ri);
+    }
+  }
+  if (rights.length < C.sideMin) return null;
+  const mir = (i) => mirror[i] !== undefined ? mirror[i] : i;   // アンカーは自己鏡映
+
+  const nL = randInt(C.loopMin, C.loopMax);
+  let ok = 0;
+  for (let l = 0; l < nL + 3 && ok < nL; l++){
+    // 次数上限(4)の残り容量があるアンカー/経由点だけから選ぶ
+    const d = degreesOf(f);
+    const availA = anchors.filter(a => d[a] <= DEG_CAP - 2);
+    if (!availA.length) break;
+    const A = choice(availA);
+    const availB = availA.filter(a => a !== A);
+    let B;
+    if ((rand() < 0.28 || !availB.length) && d[A] <= DEG_CAP - 4) B = A;
+    else if (availB.length) B = choice(availB);
+    else continue;
+    let nm = randInt(C.midMin, C.midMax);
+    if (A === B) nm = Math.max(nm, 2);
+    const pool = rights.filter(ri => d[ri] <= DEG_CAP - 2);
+    const mids = shuffle(pool).slice(0, nm);
+    if (mids.length < (A === B ? 2 : 1)) continue;
+    if (A !== B){
+      const dx = f.pts[B].x - f.pts[A].x, dy = f.pts[B].y - f.pts[A].y;
+      mids.sort((a, b) => (f.pts[a].x * dx + f.pts[a].y * dy) - (f.pts[b].x * dx + f.pts[b].y * dy));
+    } else {
+      mids.sort((a, b) => Math.atan2(f.pts[a].y - f.pts[A].y, f.pts[a].x) -
+                          Math.atan2(f.pts[b].y - f.pts[A].y, f.pts[b].x));
+    }
+    const path = [A, ...mids, B];
+    const snap = snapFig(f);
+    let good = true;
+    for (let i = 0; i + 1 < path.length && good; i++){
+      const u = path[i], v = path[i + 1];
+      if (!tryAddEdge(f, u, v, P.maxCross)) good = false;
+      else if (mir(u) !== u || mir(v) !== v){
+        if (!tryAddEdge(f, mir(u), mir(v), P.maxCross)) good = false;
+      }
+    }
+    if (!good){ restoreFig(f, snap); continue; }
+    ok++;
+  }
+  if (ok < C.loopMin) return null;
+  if (rand() < 0.25) rotateAll(f, Math.PI / 2 * (rand() < 0.5 ? 1 : -1));
+  f.fam = 'bil' + nA;
+  return f;
+}
+
+// --- 並進対称チェーン ---
+// 同形セル(閉ループ)が関節点を共有して連なる。上下対称なら数珠、
+// 交互反転なら波。全セル同じ輪郭 = リズムが「デザインされた」印象を生む。
+function genChain(P){
+  const C = P.chn;
+  const f = newFig();
+  const nc = randInt(C.cellMin, C.cellMax);
+  const sp = 0.78 + rand() * 0.2;
+  const joints = [];
+  for (let j = 0; j <= nc; j++){
+    joints.push(f.pts.length);
+    f.pts.push({ x: (j - nc / 2) * sp, y: 0 });
+  }
+  const upN = randInt(1, 2), dnN = randInt(1, 2);
+  const h = 0.42 + rand() * 0.3;
+  // 波モード: セルが上下交互に膨らむ(低Lvの端点限定モードでは輪郭が単純すぎるため除外)
+  const wave = !P.endpointsOnly && rand() < 0.35;
+  // 全セル共通の輪郭オフセット(繰り返しのリズム)
+  const upOff = Array.from({ length: upN }, (_, i) => ({
+    t: (i + 1) / (upN + 1) + (rand() * 2 - 1) * 0.08, dy: h * (0.85 + rand() * 0.3) }));
+  const dnOff = Array.from({ length: dnN }, (_, i) => ({
+    t: (i + 1) / (dnN + 1) + (rand() * 2 - 1) * 0.08, dy: h * (0.85 + rand() * 0.3) }));
+
+  for (let c = 0; c < nc; c++){
+    const j0 = joints[c], j1 = joints[c + 1];
+    const x0 = f.pts[j0].x, x1 = f.pts[j1].x;
+    const flip = wave && c % 2 === 1;
+    const mkPts = (offs, sign) => offs.map(o => {
+      const i = f.pts.length;
+      f.pts.push({ x: x0 + (x1 - x0) * o.t, y: sign * o.dy });
+      return i;
+    });
+    let loop;
+    if (wave){
+      const sign = flip ? 1 : -1;
+      const arc = mkPts(upOff, sign);
+      loop = [j0, ...arc, j1];                       // 片側の膨らみ + 関節間は弦で閉じる
+      // 波セルは関節同士を直接結んで閉じる(下辺)
+      const snap = snapFig(f);
+      let good = true;
+      for (let i = 0; i + 1 < loop.length && good; i++)
+        if (!tryAddEdge(f, loop[i], loop[i + 1], 0)) good = false;
+      if (good && !tryAddEdge(f, j1, j0, 0)) good = false;
+      if (!good){ restoreFig(f, snap); return null; }
+    } else {
+      const ups = mkPts(upOff, -1);
+      const dns = mkPts(dnOff, 1).reverse();
+      loop = [j0, ...ups, j1, ...dns];
+      if (!addLoop(f, loop, 0)) return null;
+    }
+  }
+  rotateAll(f, (rand() * 2 - 1) * 0.45);             // 少し傾けると躍動感が出る
+  f.fam = 'chn' + nc;
+  return f;
+}
+
+const GENERATORS = { rosette: genRosette, bilateral: genBilateral, chain: genChain };
+
+function buildBase(gen, P){
+  const f = GENERATORS[gen](P);
+  if (!f) return null;
+  dropUnused(f);
+  if (f.pts.length > P.maxPts + 4) return null;      // 細分による超過は少しだけ許容
+  if (!isConnectedFig(f)) return null;
+  return f;
+}
+
+// ============================================================
+// パリティ操作: 1操作でちょうど2頂点の偶奇が反転する
+//   gap   = 辺を1本削除(欠けた線)
+//   tail  = ヒゲを1本生やす(行き止まり)
+//   chord = 頂点間に線を追加(T字junction)
+// 操作の端点集合の重なりで最終的な奇点数を制御する
+// ============================================================
+function opGap(f, P, forbid, require){
+  const deg = degreesOf(f);
+  const cand = f.edges.filter(([a, b]) => {
+    if (f.opEdges.has(edgeKey(a, b))) return false;        // 操作で足した辺の削除(=打ち消し)は禁止
+    if (forbid.has(a) || forbid.has(b)) return false;
+    if (require != null && a !== require && b !== require) return false;
+    if (deg[a] < 2 || deg[b] < 2) return false;            // 孤立点を作らない
+    if (P.endpointsOnly && (deg[a] !== 2 || deg[b] !== 2)) return false;  // 低Lv: 奇点=端点のみ
+    return true;
+  });
+  shuffle(cand);
+  for (const [a, b] of cand.slice(0, 12)){
+    removeE(f, a, b);
+    if (isConnectedFig(f)) return [a, b];
+    addE(f, a, b);
+  }
+  return null;
+}
+
+function opTail(f, P, forbid, require){
+  const deg = degreesOf(f);
+  let cand = [];
+  if (require != null){ if (deg[require] < DEG_CAP && !P.endpointsOnly) cand = [require]; }
+  else cand = f.pts.map((_, i) => i).filter(i => deg[i] < DEG_CAP && !forbid.has(i));
+  shuffle(cand);
+  let cx = 0, cy = 0;
+  for (const p of f.pts){ cx += p.x; cy += p.y; }
+  cx /= f.pts.length; cy /= f.pts.length;
+  for (const v of cand.slice(0, 8)){
+    const base = Math.atan2(f.pts[v].y - cy, f.pts[v].x - cx);
+    // まず真っ直ぐ外向き(意図して生やした線に見える)、ダメなら徐々に振る
+    const dirs = [base];
+    for (let t = 0; t < 9; t++) dirs.push(base + (rand() * 2 - 1) * (t < 4 ? 0.5 : 1.4));
+    for (const a of dirs){
+      const len = 0.5 + rand() * 0.08;
+      const tip = { x: f.pts[v].x + len * Math.cos(a), y: f.pts[v].y + len * Math.sin(a) };
+      if (f.pts.some(p => dist(tip, p) < MIN_VDIST)) continue;
+      let ok = true;
+      for (const [c, d] of f.edges){
+        if (c !== v && d !== v && segInt(f.pts[v], tip, f.pts[c], f.pts[d])){ ok = false; break; }
+        if (c !== v && d !== v && ptSegDist(tip, f.pts[c], f.pts[d]) < MIN_PT_LINE){ ok = false; break; }
+      }
+      if (!ok) continue;
+      let clear = true;
+      for (let k = 0; k < f.pts.length; k++){
+        if (k === v) continue;
+        if (ptSegDist(f.pts[k], f.pts[v], tip) < MIN_PT_LINE){ clear = false; break; }
+      }
+      if (!clear) continue;
+      if (minAngleWith(f, v, a) < ANGLE_TAIL) continue;
+      const ti = f.pts.length;
+      f.pts.push(tip);
+      addE(f, v, ti);
+      f.opEdges.add(edgeKey(v, ti));
+      return [v, ti];
+    }
+  }
+  return null;
+}
+
+function opChord(f, P, forbid, require){
+  const deg = degreesOf(f);
+  const n = f.pts.length;
+  const pairs = [];
+  for (let a = 0; a < n; a++){
+    if (deg[a] >= DEG_CAP || forbid.has(a)) continue;
+    if (require != null && a !== require) continue;
+    for (let b = 0; b < n; b++){
+      if (b === a || deg[b] >= DEG_CAP || forbid.has(b) || hasE(f, a, b)) continue;
+      if (require != null && b === require) continue;
+      pairs.push([a, b]);
+    }
+  }
+  // 中心近くを通る対角線ほど「意図して引いた線」に見える
+  let cx = 0, cy = 0;
+  for (const p of f.pts){ cx += p.x; cy += p.y; }
+  cx /= f.pts.length; cy /= f.pts.length;
+  const midScore = ([a, b]) => Math.hypot((f.pts[a].x + f.pts[b].x) / 2 - cx, (f.pts[a].y + f.pts[b].y) / 2 - cy);
+  shuffle(pairs);
+  pairs.sort((p1, p2) => midScore(p1) - midScore(p2));
+  const cand = shuffle(pairs.slice(0, 8)).concat(pairs.slice(8, 20));
+  for (const [a, b] of cand){
+    const s = snapFig(f);
+    if (tryAddEdge(f, a, b, P.maxCross)){
+      // 細分された場合も奇偶が変わるのは a,b のみ。追加断片を記録
+      for (const k of f.eset) if (!s.eset.has(k)) f.opEdges.add(k);
+      return [a, b];
+    }
+    restoreFig(f, s);
+  }
+  return null;
+}
+
+const OPS = { gap: opGap, tail: opTail, chord: opChord };
+
+function doOp(f, P, forbid, require){
+  const types = shuffle(P.ops.slice());
+  for (const t of types){
+    const r = OPS[t](f, P, forbid, require);
+    if (r) return r;
+  }
+  return null;
+}
+
+// 頂点を共有する2操作 → 奇点2個(共有点は偶数に戻る)。奇点同士を離せる
+function applyTwoSharing(f, P){
+  const r1 = doOp(f, P, new Set(), null);
+  if (!r1) return false;
+  const s = choice(r1), other = r1[0] === s ? r1[1] : r1[0];
+  const r2 = doOp(f, P, new Set([other]), s);
+  return !!r2;
+}
+
+// ベース固有の奇点(B)を起点に、目標奇点数Tまでパリティを調整する
+function applyOpsForTarget(f, P, T){
+  const B = oddVertsOf(f);
+  if (T < B.length) return false;
+
+  if (T === B.length){
+    // 家などの固有奇点をそのまま使う。ときどき奇点を1つ「移動」させて意外性を出す
+    if (B.length === 2 && P.twoOpShare && rand() < 0.5){
+      const s = choice(B), other = B[0] === s ? B[1] : B[0];
+      const snap = snapFig(f);
+      if (doOp(f, P, new Set([other]), s)) return true;
+      restoreFig(f, snap);
+    }
+    return true;
+  }
+
+  if (B.length === 0 && T === 2){
+    if (P.twoOpShare && rand() < (P.spread2 > 0 ? 0.85 : 0.4)){
+      const s = snapFig(f);
+      if (applyTwoSharing(f, P)) return true;
+      restoreFig(f, s);
+    }
+    return !!doOp(f, P, new Set(), null);
+  }
+
+  // 差分を互いに素な操作で追加(1操作=奇点+2)
+  const forbid = new Set(B);
+  const k = (T - B.length) / 2;
+  for (let i = 0; i < k; i++){
+    const r = doOp(f, P, forbid, null);
+    if (!r) return false;
+    forbid.add(r[0]); forbid.add(r[1]);
+  }
+  return true;
+}
+
+// ============================================================
+// 正規化と最終検証
+// ============================================================
+function normalizeFig(f){
+  if (rand() < 0.5) f.pts = f.pts.map(p => ({ x: -p.x, y: p.y }));  // 左右反転で変化を出す
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const p of f.pts){
+    x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x);
+    y0 = Math.min(y0, p.y); y1 = Math.max(y1, p.y);
+  }
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  const s = 2 / Math.max(x1 - x0, y1 - y0, 1e-6);
+  f.pts = f.pts.map(p => ({ x: (p.x - cx) * s, y: (p.y - cy) * s }));
+}
+
+function minPairDist(f, verts){
+  let m = Infinity;
+  for (let i = 0; i < verts.length; i++)
+    for (let j = i + 1; j < verts.length; j++)
+      m = Math.min(m, dist(f.pts[verts[i]], f.pts[verts[j]]));
+  return m;
+}
+
+function validateFigure(f, P, T){
+  if (!isConnectedFig(f)) return false;
+  const deg = degreesOf(f);
+  if (deg.some(d => d > DEG_CAP)) return false;
+  const odd = oddVertsOf(f);
+  if (odd.length !== T) return false;
+  if (P.endpointsOnly && odd.some(v => deg[v] !== 1)) return false;
+
+  // 知覚監査(正規化後の座標で)
+  for (let i = 0; i < f.pts.length; i++)
+    for (let j = i + 1; j < f.pts.length; j++)
+      if (dist(f.pts[i], f.pts[j]) < F_VDIST) return false;
+  for (const [a, b] of f.edges)
+    for (let k = 0; k < f.pts.length; k++){
+      if (k === a || k === b) continue;
+      if (ptSegDist(f.pts[k], f.pts[a], f.pts[b]) < F_PT_LINE) return false;
+    }
+  const oddSet = new Set(odd);
+  for (let v = 0; v < f.pts.length; v++){
+    if (deg[v] < 2) continue;
+    const m = minAngleAt(f, v);
+    if (m < (oddSet.has(v) ? F_ANG_ODD : F_ANG_ANY)) return false;
+  }
+
+  // 奇点同士が近すぎると数え間違いを誘発するため全レベルで距離を保証
+  if (odd.length >= 2 && minPairDist(f, odd) < F_ODD_SP) return false;
+  // 高Lv: 奇点を離れた場所に分散(視線スキャンを強制)
+  const sp = T === 2 ? P.spread2 : T === 4 ? P.spread4 : T === 6 ? P.spread6 : 0;
+  if (sp > 0 && odd.length >= 2 && minPairDist(f, odd) < sp) return false;
+  return true;
+}
+
+// ============================================================
+// レベルデザイン
+//   Lv1-3: 端点(行き止まり)を数えるだけ → 瞬間視のアハ体験
+//   Lv4-7: 対称図形に隠れたT字を見抜く → 直感を騙す
+//   Lv8+ : 星型・分散配置 → 視線を走らせて違和感を探す
+// ============================================================
+function levelParams(L){
+  const t = Math.min(L, 12);
+  const P = { level: L, maxCross: 0, endpointsOnly: false, twoOpShare: false,
+              spread2: 0, spread4: 0, spread6: 0 };
+  if (t <= 2){
+    P.gens = ['chain', 'bilateral']; P.ops = ['gap']; P.endpointsOnly = true;
+    P.dT = [2]; P.nT = [4]; P.maxPts = 11;
+    P.chn = { cellMin: 2, cellMax: 3 };
+    P.bil = { anchMax: 2, sideMin: 4, sideMax: 5, loopMin: 2, loopMax: 2, midMin: 2, midMax: 2 };
+  } else if (t === 3){
+    P.gens = ['chain', 'bilateral', 'rosette']; P.ops = ['gap', 'tail'];
+    P.dT = [2]; P.nT = [4]; P.maxPts = 12;
+    P.ros = { kMin: 3, kMax: 4, maxOrbits: 2, sysMin: 2, sysMax: 2, maxHops: 1, allowStar: false };
+    P.chn = { cellMin: 2, cellMax: 3 };
+    P.bil = { anchMax: 3, sideMin: 3, sideMax: 4, loopMin: 2, loopMax: 2, midMin: 1, midMax: 2 };
+  } else if (t <= 5){
+    P.gens = ['rosette', 'bilateral', 'chain']; P.ops = ['gap', 'tail', 'chord'];
+    P.dT = [0, 2, 2, 2]; P.nT = [4]; P.maxPts = 13; P.twoOpShare = true;
+    P.ros = { kMin: 3, kMax: 5, maxOrbits: 3, sysMin: 2, sysMax: 2, maxHops: 2, allowStar: false };
+    P.chn = { cellMin: 3, cellMax: 4 };
+    P.bil = { anchMax: 3, sideMin: 3, sideMax: 5, loopMin: 2, loopMax: 3, midMin: 1, midMax: 3 };
+  } else if (t <= 7){
+    // 細長いチェーンは高Lvで雑然と見えるため出現率を下げる
+    P.gens = ['rosette', 'rosette', 'bilateral', 'bilateral', 'chain']; P.ops = ['gap', 'tail', 'chord'];
+    P.dT = [0, 2, 2, 2, 2]; P.nT = [4]; P.maxPts = 14; P.twoOpShare = true;
+    if (t === 7) P.maxCross = 3;
+    P.ros = { kMin: 4, kMax: 6, maxOrbits: 3, sysMin: 2, sysMax: 3, maxHops: 2, allowStar: t === 7 };
+    P.chn = { cellMin: 3, cellMax: 4 };
+    P.bil = { anchMax: 3, sideMin: 4, sideMax: 5, loopMin: 2, loopMax: 3, midMin: 1, midMax: 3 };
+  } else {
+    P.gens = ['rosette', 'rosette', 'bilateral', 'bilateral', 'chain']; P.ops = ['gap', 'tail', 'chord'];
+    P.dT = [0, 2, 2, 2, 2]; P.nT = [4, 4, 6]; P.maxPts = 16; P.twoOpShare = true; P.maxCross = 3;
+    P.ros = { kMin: 4, kMax: 7, maxOrbits: 3, sysMin: 2, sysMax: 3, maxHops: 2, allowStar: true };
+    P.chn = { cellMin: 3, cellMax: 5 };
+    P.bil = { anchMax: 3, sideMin: 4, sideMax: 6, loopMin: 2, loopMax: 4, midMin: 1, midMax: 3 };
+  }
+  return P;
+}
+
+// 必ず成功するフォールバック構築(多角形ベース)
+function fallbackFigure(answer){
+  const f = newFig();
+  const n = 7;
+  f.pts = circlePts(0, 0, 1, n, rand() * Math.PI * 2);
+  for (let i = 0; i < n; i++) addE(f, i, (i + 1) % n);
+  if (answer){
+    removeE(f, 0, 1);                       // 奇点2(端点×2)
+  } else {
+    for (const v of [1, 4]){                // 放射状ヒゲ×2 → 奇点4
+      const p = f.pts[v];
+      const len = 1.45;
+      f.pts.push({ x: p.x * len, y: p.y * len });
+      addE(f, v, f.pts.length - 1);
+    }
+  }
+  normalizeFig(f);
+  return f;
+}
+
+// ============================================================
+// ラウンド生成(答え主導 + 検証 + リトライ)
+// ============================================================
+function generateRound(level, answer){
+  const P = levelParams(level);
+  // 図形の種類は最初に一様抽選で確定し、生成成功率の差で分布が偏らないようにする
+  const roundGen = choice(P.gens);
+  for (let attempt = 0; attempt < 130; attempt++){
+    const gen = attempt < 85 ? roundGen : choice(P.gens);
+    const f = buildBase(gen, P);
+    if (!f) continue;
+    const T = Math.max(choice(answer ? P.dT : P.nT), oddVertsOf(f).length);
+    if (answer && T > 2) continue;
+    if (!applyOpsForTarget(f, P, T)) continue;
+    normalizeFig(f);
+    if (!validateFigure(f, P, T)) continue;
+    if (isDrawableFig(f) !== answer) continue;   // 最終保証
+    return { fig: f, answer, odd: oddVertsOf(f), fallback: false, family: f.fam || gen };
+  }
+  const f = fallbackFigure(answer);
+  return { fig: f, answer, odd: oddVertsOf(f), fallback: true, family: 'fallback' };
+}
+
+// 図形の指紋(直近の出題との重複を避けて「毎回新作」を保証する)
+function figHash(f){
+  return f.pts.map(p => Math.round(p.x * 14) + ',' + Math.round(p.y * 14)).sort().join(';') +
+         '|' + f.edges.length;
+}
+
+// ============================================================
+// 自己テスト(ブラウザconsole: runSelfTest() / Nodeでも実行可)
+// ============================================================
+function runSelfTest(roundsPerLevel = 2000){
+  const out = [];
+  const log = (s) => { out.push(s); console.log(s); };
+
+  // --- オイラー判定の単体テスト ---
+  const mk = (n, edges) => {
+    const f = newFig();
+    for (let i = 0; i < n; i++) f.pts.push({ x: i, y: (i * 7) % 3 });
+    for (const [a, b] of edges) addE(f, a, b);
+    return f;
+  };
+  const cases = [
+    ['三角形(奇点0)',      mk(3, [[0,1],[1,2],[2,0]]), true],
+    ['パス(奇点2)',        mk(3, [[0,1],[1,2]]), true],
+    ['K4(奇点4)',          mk(4, [[0,1],[0,2],[0,3],[1,2],[1,3],[2,3]]), false],
+    ['星S4(奇点4)',        mk(5, [[0,1],[0,2],[0,3],[0,4]]), false],
+    ['非連結(2つの三角形)', mk(6, [[0,1],[1,2],[2,0],[3,4],[4,5],[5,3]]), false],
+    ['8の字(奇点0)',       mk(5, [[0,1],[1,2],[2,0],[0,3],[3,4],[4,0]]), true],
+  ];
+  let unitFail = 0;
+  for (const [name, f, want] of cases){
+    const got = isDrawableFig(f);
+    if (got !== want){ unitFail++; log(`✗ 単体テスト失敗: ${name} 期待=${want} 実際=${got}`); }
+  }
+  log(unitFail === 0 ? `✓ オイラー判定 単体テスト ${cases.length}件 全て成功` : `✗ 単体テスト ${unitFail}件失敗`);
+
+  // --- 生成テスト: コインの答えと図形の実際の可否が100%一致すること ---
+  let totalMismatch = 0;
+  for (const L of [1, 2, 3, 4, 5, 6, 7, 8, 10, 12]){
+    let mismatch = 0, fallbacks = 0, drawCount = 0;
+    let edgesD = 0, edgesN = 0, nD = 0, nN = 0;
+    const oddDegHist = {};
+    for (let i = 0; i < roundsPerLevel; i++){
+      const answer = rand() < 0.5;             // 本番と同じコインフリップ
+      const r = generateRound(L, answer);
+      const actual = isDrawableFig(r.fig);
+      if (actual !== answer) mismatch++;
+      if (r.fallback) fallbacks++;
+      if (answer){ drawCount++; edgesD += r.fig.edges.length; nD++; }
+      else { edgesN += r.fig.edges.length; nN++; }
+      const deg = degreesOf(r.fig);
+      for (const v of r.odd) oddDegHist[deg[v]] = (oddDegHist[deg[v]] || 0) + 1;
+    }
+    totalMismatch += mismatch;
+    log(`Lv${String(L).padStart(2)}: 不一致=${mismatch} fallback=${(fallbacks / roundsPerLevel * 100).toFixed(1)}%` +
+        ` 描ける率=${(drawCount / roundsPerLevel * 100).toFixed(1)}%` +
+        ` 辺数(可/不可)=${(edgesD / Math.max(nD, 1)).toFixed(1)}/${(edgesN / Math.max(nN, 1)).toFixed(1)}` +
+        ` 奇点次数分布=${JSON.stringify(oddDegHist)}`);
+  }
+  log(totalMismatch === 0
+    ? '✓ 全レベルで「コインの答え = 図形の実際の可否」が100%一致(確率は正確に50%)'
+    : `✗ 不一致が${totalMismatch}件 — 要修正`);
+  return { ok: unitFail === 0 && totalMismatch === 0, log: out };
+}
+/*LOGIC-END*/
+
+// ============================================================
+// ここからブラウザ専用(レンダリング + ゲーム進行)
+// ============================================================
+if (typeof document !== 'undefined'){ (function(){
+
+  const $ = (id) => document.getElementById(id);
+  const cv = $('cv'), ctx = cv.getContext('2d');
+  const stage = $('stage');
+
+  const TIME_LIMIT = 5000;   // 制限時間は常に5秒
+  const INK = '#ecf1ff';
+
+  const S = {
+    mode: 'title',           // title | playing | feedback | gameover
+    level: 1, correct: 0, score: 0, lives: 3, streak: 0,
+    round: null, feedback: null,
+    best: Number(localStorage.getItem('oneStroke.best') || 0),
+    mute: localStorage.getItem('oneStroke.mute') === '1',
+    lastTick: -1,
+    recent: [],          // 直近の図形ハッシュ(同一図形の再出題防止)
+    recentFams: [],      // 直近の図形ファミリー(似た種類の連続を防ぐ)
+    lastColor: null,
+  };
+
+  // ラウンドごとに線の色相を変える(ガチャ的な新鮮さ)。図形自体は常に単色
+  const PALETTE = ['#eef2ff', '#ffd166', '#8fd8ff', '#b5f28c', '#f7a8d8', '#cdbcff'];
+
+  // ---------- サウンド(WebAudio合成・ファイル不要) ----------
+  let AC = null;
+  function beep(freq, dur, type = 'sine', vol = 0.18, when = 0){
+    if (S.mute || !AC) return;
+    const t = AC.currentTime + when;
+    const o = AC.createOscillator(), g = AC.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(g); g.connect(AC.destination);
+    o.start(t); o.stop(t + dur + 0.02);
+  }
+  const sndGood = () => { beep(660, 0.09); beep(990, 0.12, 'sine', 0.18, 0.07); };
+  const sndBad  = () => beep(150, 0.25, 'square', 0.12);
+  const sndTick = () => beep(1100, 0.03, 'sine', 0.07);
+
+  // ---------- キャンバス ----------
+  function fitCanvas(){
+    const r = stage.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    cv.width = Math.round(r.width * dpr);
+    cv.height = Math.round(r.height * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  window.addEventListener('resize', fitCanvas);
+
+  function drawFigure(now){
+    const r = stage.getBoundingClientRect();
+    const W = r.width, H = r.height;
+    ctx.clearRect(0, 0, W, H);
+    if (!S.round) return;
+    const f = S.round.fig;
+
+    const scale = Math.min(W, H) / 2 * 0.78;
+    const ox = W / 2, oy = H / 2;
+    const X = (p) => ox + p.x * scale;
+    const Y = (p) => oy + p.y * scale;
+
+    const age = now - S.round.shownAt;
+    ctx.save();
+
+    const col = (S.feedback && S.feedback.ok) ? '#7fe8b0' : (S.round.color || INK);
+    ctx.strokeStyle = col;
+    ctx.shadowColor = col;
+    ctx.shadowBlur = Math.min(W, H) * 0.03;          // 淡いグローで「光る線」に
+    ctx.lineWidth = Math.max(3.2, Math.min(W, H) * 0.012);
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+    // 一筆ずつ描き込まれる出現アニメ(約300ms)。生成順=ループ順なので筆致に見える
+    const E = f.edges.length;
+    ctx.beginPath();
+    for (let i = 0; i < E; i++){
+      const delay = i * (190 / E);
+      const pr = Math.min(1, Math.max(0, (age - delay) / 110));
+      if (pr <= 0) continue;
+      const [a, b] = f.edges[i];
+      const ax = X(f.pts[a]), ay = Y(f.pts[a]);
+      const e = 1 - (1 - pr) * (1 - pr);             // ease-out
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(ax + (X(f.pts[b]) - ax) * e, ay + (Y(f.pts[b]) - ay) * e);
+    }
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // ミス時: 奇点を赤くハイライト(理由の可視化)
+    if (S.feedback && !S.feedback.ok){
+      const pulse = 1 + 0.25 * Math.sin(now / 110);
+      for (const v of S.round.odd){
+        ctx.beginPath();
+        ctx.arc(X(f.pts[v]), Y(f.pts[v]), 11 * pulse, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255,93,93,.28)';
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(X(f.pts[v]), Y(f.pts[v]), 5.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#ff5d5d';
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  // ---------- HUD ----------
+  function updateHud(){
+    $('lives').textContent = '❤'.repeat(S.lives) + '♡'.repeat(3 - S.lives);
+    $('level').textContent = 'Lv ' + S.level;
+    $('score').textContent = S.score;
+    $('muteBtn').textContent = S.mute ? '🔇' : '🔊';
+  }
+
+  function setButtons(on){
+    $('btnYes').disabled = !on;
+    $('btnNo').disabled = !on;
+  }
+
+  // ---------- ゲーム進行 ----------
+  function startGame(){
+    S.level = 1; S.correct = 0; S.score = 0; S.lives = 3; S.streak = 0;
+    $('titleScreen').classList.add('hidden');
+    $('gameoverScreen').classList.add('hidden');
+    $('flash').classList.add('hidden');
+    $('combo').classList.add('hidden');
+    nextRound();
+  }
+
+  function nextRound(){
+    const newLevel = 1 + Math.floor(S.correct / 2);
+    if (newLevel > S.level){
+      $('lvup').style.opacity = 1;
+      setTimeout(() => { $('lvup').style.opacity = 0; }, 900);
+    }
+    S.level = newLevel;
+    const answer = rand() < 0.5;              // ここが正確に50%
+    // 「毎回新作」の演出: 同一図形はもちろん、直近2問と同じ図形ファミリー
+    // (同じ回転数のロゼット等)も避けて、種類が回るように出題する
+    let r = null;
+    for (let i = 0; i < 14; i++){
+      r = generateRound(S.level, answer);
+      const h = figHash(r.fig);
+      const famDup = S.recentFams.slice(-2).includes(r.family);
+      if (!S.recent.includes(h) && (!famDup || i >= 10)){
+        break;
+      }
+    }
+    S.recent.push(figHash(r.fig));
+    if (S.recent.length > 8) S.recent.shift();
+    S.recentFams.push(r.family);
+    if (S.recentFams.length > 4) S.recentFams.shift();
+    const colorPool = PALETTE.filter(c => c !== S.lastColor);
+    S.lastColor = choice(colorPool);
+    S.round = { ...r, color: S.lastColor, start: performance.now(), shownAt: performance.now() };
+    S.feedback = null;
+    S.mode = 'playing';
+    S.lastTick = -1;
+    $('flash').classList.add('hidden');
+    setButtons(true);
+    updateHud();
+  }
+
+  function answerInput(saidYes){
+    if (S.mode !== 'playing') return;
+    resolveRound(saidYes === S.round.answer, 'answer');
+  }
+
+  function resolveRound(ok, why){
+    S.mode = 'feedback';
+    setButtons(false);
+    const now = performance.now();
+    const remain = Math.max(0, TIME_LIMIT - (now - S.round.start));
+
+    const fm = $('flashMain'), fs = $('flashSub');
+    if (ok){
+      S.correct++;
+      S.streak++;
+      const mult = 1 + 0.15 * Math.min(S.streak - 1, 10);
+      const pts = Math.round((100 + remain / 40) * mult);
+      S.score += pts;
+      fm.textContent = '〇 正解!'; fm.className = 'good';
+      fs.textContent = '+' + pts;
+      if (S.streak >= 2){
+        $('combo').textContent = '🔥 ' + S.streak + ' COMBO ×' + mult.toFixed(2).replace(/0$/, '');
+        $('combo').classList.remove('hidden');
+      }
+      sndGood();
+      S.feedback = { ok, until: now + 480 };
+    } else {
+      S.streak = 0;
+      S.lives--;
+      $('combo').classList.add('hidden');
+      fm.textContent = why === 'timeout' ? '⏰ 時間切れ!' : '✕ 不正解…';
+      fm.className = 'bad';
+      fs.textContent = `正解は「${S.round.answer ? '描ける' : '描けない'}」でした`;
+      stage.classList.remove('shake'); void stage.offsetWidth; stage.classList.add('shake');
+      sndBad();
+      S.feedback = { ok, until: now + 2100 };
+    }
+    $('flash').classList.remove('hidden');
+    updateHud();
+  }
+
+  function gameOver(){
+    S.mode = 'gameover';
+    const isRecord = S.score > S.best;
+    if (isRecord){
+      S.best = S.score;
+      localStorage.setItem('oneStroke.best', String(S.best));
+    }
+    $('goStats').innerHTML =
+      `スコア <span class="num">${S.score}</span> ／ ベスト <span class="num">${S.best}</span><br>` +
+      `到達レベル ${S.level} ・ 正解数 ${S.correct}`;
+    $('newRecord').classList.toggle('hidden', !isRecord);
+    $('flash').classList.add('hidden');
+    $('gameoverScreen').classList.remove('hidden');
+  }
+
+  // ---------- メインループ ----------
+  function frame(now){
+    if (S.mode === 'playing'){
+      const remain = TIME_LIMIT - (now - S.round.start);
+      if (remain <= 0){
+        $('timerBar').style.width = '0%';
+        resolveRound(false, 'timeout');
+      } else {
+        const bar = $('timerBar');
+        bar.style.width = (remain / TIME_LIMIT * 100) + '%';
+        bar.classList.toggle('low', remain < 1600);
+        const sec = Math.ceil(remain / 1000);
+        if (remain < 2050 && sec !== S.lastTick){ S.lastTick = sec; sndTick(); }
+      }
+    } else if (S.mode === 'feedback'){
+      if (now >= S.feedback.until){
+        if (S.lives <= 0) gameOver();
+        else nextRound();
+      }
+    }
+    drawFigure(now);
+    requestAnimationFrame(frame);
+  }
+
+  // ---------- 入力 ----------
+  function ensureAudio(){
+    if (!AC){
+      try { AC = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
+    }
+  }
+  $('startBtn').addEventListener('click', () => { ensureAudio(); startGame(); });
+  $('retryBtn').addEventListener('click', () => { ensureAudio(); startGame(); });
+  $('btnYes').addEventListener('click', () => answerInput(true));
+  $('btnNo').addEventListener('click', () => answerInput(false));
+  $('muteBtn').addEventListener('click', () => {
+    S.mute = !S.mute;
+    localStorage.setItem('oneStroke.mute', S.mute ? '1' : '0');
+    updateHud();
+  });
+  window.addEventListener('keydown', (e) => {
+    if (S.mode === 'playing'){
+      if (e.key === 'ArrowLeft' || e.key === 'o' || e.key === 'O') answerInput(true);
+      if (e.key === 'ArrowRight' || e.key === 'x' || e.key === 'X') answerInput(false);
+    } else if (S.mode === 'title' || S.mode === 'gameover'){
+      if (e.key === ' ' || e.key === 'Enter'){ ensureAudio(); startGame(); }
+    }
+  });
+
+  // ---------- ギャラリーモード(調整用): index.html#gallery ----------
+  function showGallery(){
+    document.getElementById('app').style.display = 'none';
+    const g = $('gallery');
+    g.style.display = 'flex';
+    for (const L of [1, 2, 3, 4, 5, 6, 7, 8, 10, 12]){
+      for (const answer of [true, false]){
+        const r = generateRound(L, answer);
+        const cell = document.createElement('div');
+        cell.className = 'cell';
+        const c = document.createElement('canvas');
+        c.width = 200; c.height = 200;
+        const cc = c.getContext('2d');
+        cc.strokeStyle = INK; cc.lineWidth = 2.4; cc.lineCap = 'round';
+        const sc = 78, ox = 100, oy = 100;
+        cc.beginPath();
+        for (const [a, b] of r.fig.edges){
+          cc.moveTo(ox + r.fig.pts[a].x * sc, oy + r.fig.pts[a].y * sc);
+          cc.lineTo(ox + r.fig.pts[b].x * sc, oy + r.fig.pts[b].y * sc);
+        }
+        cc.stroke();
+        for (const v of r.odd){
+          cc.beginPath();
+          cc.arc(ox + r.fig.pts[v].x * sc, oy + r.fig.pts[v].y * sc, 5, 0, Math.PI * 2);
+          cc.fillStyle = 'rgba(255,93,93,.75)'; cc.fill();
+        }
+        cell.appendChild(c);
+        const lab = document.createElement('div');
+        lab.textContent = `Lv${L} ${answer ? '○描ける' : '✕描けない'} 奇点${r.odd.length} [${r.family}]${r.fallback ? ' FB' : ''}`;
+        lab.style.color = answer ? '#3ddc84' : '#ff5d5d';
+        cell.appendChild(lab);
+        g.appendChild(cell);
+      }
+    }
+  }
+
+  // ---------- 起動 ----------
+  window.runSelfTest = runSelfTest;
+  if (location.hash === '#gallery'){
+    showGallery();
+  } else {
+    fitCanvas();
+    updateHud();
+    setButtons(false);
+    requestAnimationFrame(frame);
+  }
+
+})(); }
+</script>
+</body>
+</html>
