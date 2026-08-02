@@ -973,18 +973,15 @@ if (typeof document !== 'undefined'){ (function(){
   const sndTick = () => beep(1100, 0.03, 'sine', 0.07);
 
   // ---------- キャンバス ----------
-  function fitCanvas(){
-    const r = stage.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    cv.width = Math.round(r.width * dpr);
-    cv.height = Math.round(r.height * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }
-  window.addEventListener('resize', fitCanvas);
-
+  // モバイルブラウザはアプリ切替等でCanvasのコンテキスト状態(変換行列)を
+  // 黙って初期化することがあるため、サイズと変換は毎フレーム同期する
   function drawFigure(now){
     const r = stage.getBoundingClientRect();
     const W = r.width, H = r.height;
+    const dpr = window.devicePixelRatio || 1;
+    const bw = Math.round(W * dpr), bh = Math.round(H * dpr);
+    if (cv.width !== bw || cv.height !== bh){ cv.width = bw; cv.height = bh; }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, W, H);
     if (!S.round) return;
     const f = S.round.fig;
@@ -1239,7 +1236,6 @@ if (typeof document !== 'undefined'){ (function(){
   if (location.hash === '#gallery'){
     showGallery();
   } else {
-    fitCanvas();
     updateHud();
     setButtons(false);
     requestAnimationFrame(frame);
